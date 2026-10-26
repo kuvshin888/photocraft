@@ -132,7 +132,8 @@ impl GuideDrag {
     /// instead, as a guide dragged out of a ruler does (#3770) and as in Photoshop: Snap To targets
     /// (layer edges, the grid, the document's centre) neither pull it first nor hold it on a target
     /// it sits on. Not while the pointer is still where it went down, so a Shift-click selects the
-    /// guide without moving it, nor off the document, where letting go removes the guide.
+    /// guide without moving it, nor off the document, where letting go removes the guide; a tick
+    /// past the document's edge leaves the guide on the edge.
     pub fn follow_pointer(&mut self, app: &mut PhotocraftApp, raw: [f64; 2], p: [f64; 2], shift: bool) {
         let vertical = self.vertical;
         let along = |q: [f64; 2]| if vertical { q[0] } else { q[1] };
@@ -150,7 +151,7 @@ impl GuideDrag {
             && !self.held_in_place(app)
             && let Some(xf) = ViewXform::active(app)
         {
-            self.pos = snap_to_tick(app, &xf, vertical, self.pointer);
+            self.pos = snap_to_tick(app, &xf, vertical, self.pointer).clamp(0.0, extent);
         }
     }
 }
@@ -1621,5 +1622,30 @@ mod tests {
         assert_eq!(drag(100.3, &[115.0, 101.5]), vec![100.0]);
         // Above the document, by the 0 tick: removed.
         assert_eq!(drag(100.3, &[60.0, -4.0]), Vec::<f64>::new());
+    }
+
+    /// A tick past the document's edge leaves a Shift-moved guide on the edge, not off the document:
+    /// with the zero point at y = 3 the ticks by the bottom of the 300 px document are 293 and 303,
+    /// and a guide let go at 298.5 lands on 300.
+    #[test]
+    fn a_shift_moved_guide_stops_at_the_documents_edge() {
+        let mut h = canvas_harness(false);
+        h.state_mut().run("view.setRulerOrigin", json!({"x": 0.0, "y": 3.0})).unwrap();
+        h.run_steps(2);
+        let shift = egui::Modifiers::SHIFT;
+        let press = canvas_at(&h, 200.0, 100.0);
+        h.event_modifiers(egui::Event::PointerMoved(press), shift);
+        h.run_steps(1);
+        h.event_modifiers(egui::Event::PointerButton { pos: press, button: egui::PointerButton::Primary, pressed: true, modifiers: shift }, shift);
+        h.run_steps(1);
+        let mut at = press;
+        for y in [250.0, 298.5] {
+            at = canvas_at(&h, 210.0, y);
+            h.event_modifiers(egui::Event::PointerMoved(at), shift);
+            h.run_steps(2);
+        }
+        h.event_modifiers(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: shift }, shift);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().doc.guides.horizontal, vec![300.0]);
     }
 }
